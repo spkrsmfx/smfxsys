@@ -208,6 +208,7 @@ vectorTest
 	beq		.noWrite
 ;		move.w	
 ;		move.w	#$7,$ffff8240
+		jsr		analyseVector
 
 
 		; if we get here , we do have TD
@@ -407,6 +408,7 @@ setupTimerDepends
 	ENDC
 	or.w	#TDV,TD_WRITES
 	move.l	(a1)+,TD_VECTOR
+
 
 	move.b	$fffffa1d.w,d0
 	andi.b	#$f0,d0
@@ -787,5 +789,83 @@ redirectTimerD
 	dc.w	1
 	dc.w	1
 
+analyseVector
+	movem.l	d0-a6,-(sp)
+	; clear the current vector
+	lea		currentVectorData,a0
+	moveq	#0,d0
+	REPT 12
+		move.l	d0,(a0)+
+	ENDR
 
+;	move.b	#0,$ffffc123
 
+	; now build the current vector
+	move.l	TD_VECTOR,a0				; this is the vector
+	cmp.w	#$4e73,(a0)
+	beq		.skip
+	move.l	a0,d0						; this is the source vector address
+	lea		currentVectorData,a1
+	; boundary checking...
+.analyse
+	cmp.w	#$21fc,(a0)
+	bne		.error	
+	cmp.w	#$31fc,8(a0)
+	bne		.error
+	cmp.w	#$4e73,14(a0)
+	bne		.error
+	; we always write when we are here
+	move.l	2(a0),(a1)+					; PSG COMMAND
+	move.w	10(a0),(a1)+				; VECTOR
+	move.l	d0,d1
+	move.w	10(a0),d1					; d1 is the target
+.save
+	move.l	d1,a0
+	cmp.l	d1,d0						; detect loop
+	bne		.analyse					; if its the same, we are done
+
+	; now analysis is complete, we can patternmatch!
+	move.w	vectorDataListEntries,d7
+	beq		.justAdd
+	subq.w	#1,d7
+	; we search!
+	lea		vectorDataList,a0					; this is the whole list
+.search
+		lea		currentVectorData,a1
+		moveq	#0,d0								; to indicate similarirty
+		move.w	#12-1,d6
+.checkItem
+		cmp.l	(a0)+,(a1)+						; compare 2 longwords
+		beq		.goOn							; fi they are the same, its ok
+			moveq	#-1,d0						; if not the same, mark that its not ok
+.goOn
+		dbra	d6,.checkItem					; and move through whole thing
+		tst.l	d0								; if d0 is 0 for 12 longwords, we have found a match!
+		beq		.found
+	dbra	d7,.search
+	; if we get here, its not found, so we should add
+	move.b	#0,$ffffc123
+.justAdd
+	move.w	vectorDataListEntries,d0
+	muls	#48,d0
+	lea		vectorDataList,a6
+	add.w	d0,a6
+	movem.l	currentVectorData,d0-d7/a0/a1/a2/a3
+	movem.l	d0-d7/a0/a1/a2/a3,(a6)
+	addq.w	#1,vectorDataListEntries
+	jmp		.skip
+
+.found
+	; here we can do some stuff indicating its found!
+
+.skip
+	movem.l	(sp)+,d0-a6
+	rts
+.error
+	move.b	#0,$ffffc123
+	rts
+currentVectorData		ds.l	12
+; lets assume we encode:
+;	(COMMAND,VECTOR) = 6 per, lets assume 8 command max: 48 bytes per
+vectorDataListEntries	dc.w	0
+vectorDataList			ds.b	256*48
